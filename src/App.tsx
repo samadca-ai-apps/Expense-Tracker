@@ -235,7 +235,7 @@ export default function App() {
         {/* Header */}
         <header className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
-            <h1 className="text-3xl font-bold tracking-tight text-slate-900">Family Expense Tracker</h1>
+            <h1 className="text-3xl font-bold tracking-tight text-slate-900">Unzila's Expense Tracker</h1>
             <p className="text-slate-500 mt-1 flex items-center gap-2">
               <User size={16} /> Logged in as <span className="font-medium text-slate-700">{currentUser}</span>
             </p>
