@@ -1,12 +1,13 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recharts';
-import { Plus, IndianRupee, TrendingUp, TrendingDown, Calendar, Tag, User, Download, Trash2, Database, CheckCircle, XCircle, AlertCircle } from 'lucide-react';
+import { Plus, IndianRupee, TrendingUp, TrendingDown, Calendar, Tag, User, Download, Trash2, Database, CheckCircle, XCircle, AlertCircle, Camera, Loader2 } from 'lucide-react';
 import { format, isSameMonth } from 'date-fns';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import html2canvas from 'html2canvas';
 import { db, isFirebaseConfigured, initError } from './firebase';
 import { collection, addDoc, getDocs, deleteDoc, doc, query, orderBy, limit } from 'firebase/firestore';
+import { GoogleGenAI, Type } from '@google/genai';
 
 type TransactionType = 'Income' | 'Expense';
 
@@ -31,8 +32,10 @@ export default function App() {
   const [description, setDescription] = useState('');
   const [date, setDate] = useState(format(new Date(), 'yyyy-MM-dd'));
   const [loading, setLoading] = useState(true);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [notification, setNotification] = useState<{message: string, type: 'success' | 'error'} | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const currentUser = 'samadca@gmail.com'; // Mock active user
 
   const categories = type === 'Expense' ? EXPENSE_CATEGORIES : INCOME_CATEGORIES;
@@ -66,6 +69,77 @@ export default function App() {
   const showNotification = (message: string, type: 'success' | 'error') => {
     setNotification({ message, type });
     setTimeout(() => setNotification(null), 3000);
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!process.env.GEMINI_API_KEY) {
+      showNotification('Gemini API Key is missing.', 'error');
+      return;
+    }
+
+    setIsAnalyzing(true);
+    try {
+      const reader = new FileReader();
+      reader.onloadend = async () => {
+        const base64Data = (reader.result as string).split(',')[1];
+        
+        const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+        const response = await ai.models.generateContent({
+          model: 'gemini-3-flash-preview',
+          contents: {
+            parts: [
+              {
+                inlineData: {
+                  mimeType: file.type,
+                  data: base64Data
+                }
+              },
+              {
+                text: `Analyze this receipt or bill. Extract the total amount, a short description (e.g. vendor name), the date (YYYY-MM-DD), and the best matching category from this list: ${EXPENSE_CATEGORIES.join(', ')}.`
+              }
+            ]
+          },
+          config: {
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                amount: { type: Type.NUMBER, description: "Total amount on the receipt" },
+                description: { type: Type.STRING, description: "Vendor name or short description" },
+                date: { type: Type.STRING, description: "Date in YYYY-MM-DD format" },
+                category: { type: Type.STRING, description: "Best matching category from the provided list" }
+              },
+              required: ["amount", "description", "date", "category"]
+            }
+          }
+        });
+
+        if (response.text) {
+          const data = JSON.parse(response.text);
+          if (data.amount) setAmount(data.amount.toString());
+          if (data.description) setDescription(data.description);
+          if (data.date) setDate(data.date);
+          if (data.category && EXPENSE_CATEGORIES.includes(data.category)) {
+            setCategory(data.category);
+          } else {
+            setCategory('Other');
+          }
+          setType('Expense');
+          showNotification('Receipt analyzed successfully! Please review the details.', 'success');
+        }
+        setIsAnalyzing(false);
+      };
+      reader.readAsDataURL(file);
+    } catch (error) {
+      console.error("Error analyzing receipt:", error);
+      showNotification('Failed to analyze receipt.', 'error');
+      setIsAnalyzing(false);
+    } finally {
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -306,9 +380,29 @@ export default function App() {
           
           {/* Add Transaction Form */}
           <div className="lg:col-span-1 bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
-            <h2 className="text-xl font-semibold mb-6 flex items-center gap-2">
-              <Plus size={20} className="text-blue-600" /> Add Transaction
-            </h2>
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-xl font-semibold flex items-center gap-2">
+                <Plus size={20} className="text-blue-600" /> Add Transaction
+              </h2>
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isAnalyzing}
+                className="flex items-center gap-2 px-3 py-1.5 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
+                title="Scan Receipt"
+              >
+                {isAnalyzing ? <Loader2 size={16} className="animate-spin" /> : <Camera size={16} />}
+                {isAnalyzing ? 'Analyzing...' : 'Scan'}
+              </button>
+              <input 
+                type="file" 
+                accept="image/*" 
+                capture="environment" 
+                ref={fileInputRef} 
+                onChange={handleFileUpload} 
+                className="hidden" 
+              />
+            </div>
             
             <form onSubmit={handleSubmit} className="space-y-5">
               <div>
