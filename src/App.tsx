@@ -5,7 +5,7 @@ import { format, isSameMonth } from 'date-fns';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import html2canvas from 'html2canvas';
-import { db, isFirebaseConfigured } from './firebase';
+import { db, isFirebaseConfigured, initError } from './firebase';
 import { collection, addDoc, getDocs, deleteDoc, doc, query, orderBy, limit } from 'firebase/firestore';
 
 type TransactionType = 'Income' | 'Expense';
@@ -196,6 +196,25 @@ export default function App() {
     return <div className="min-h-screen bg-slate-50 flex items-center justify-center text-slate-500">Loading...</div>;
   }
 
+  if (initError) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+        <div className="bg-white p-8 rounded-2xl shadow-sm border border-rose-100 max-w-2xl w-full">
+          <div className="flex items-center gap-3 mb-6">
+            <div className="p-3 bg-rose-50 text-rose-600 rounded-xl">
+              <AlertCircle size={24} />
+            </div>
+            <h1 className="text-2xl font-bold text-slate-900">Database Connection Error</h1>
+          </div>
+          <div className="prose prose-slate max-w-none text-rose-600">
+            <p>Firebase failed to initialize. This usually happens if your environment variables are incorrect or missing the <strong>appId</strong>.</p>
+            <p className="font-mono text-sm bg-rose-50 p-4 rounded-lg mt-4">{initError}</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (!isFirebaseConfigured) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
@@ -218,6 +237,7 @@ export default function App() {
                   <li>VITE_FIREBASE_API_KEY</li>
                   <li>VITE_FIREBASE_AUTH_DOMAIN</li>
                   <li>VITE_FIREBASE_PROJECT_ID</li>
+                  <li>VITE_FIREBASE_APP_ID <span className="text-slate-400 font-sans">(Optional but recommended)</span></li>
                 </ul>
               </li>
             </ol>
