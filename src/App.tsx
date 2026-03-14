@@ -693,7 +693,7 @@ export default function App() {
 
       {/* Notification Toast */}
       {notification && (
-        <div className={`fixed bottom-4 right-4 flex items-center gap-2 px-4 py-3 rounded-xl shadow-lg text-white text-sm font-medium transition-all duration-300 animate-in slide-in-from-bottom-5 ${notification.type === 'success' ? 'bg-emerald-600' : 'bg-rose-600'}`}>
+        <div className={`fixed bottom-24 lg:bottom-4 right-4 z-50 flex items-center gap-2 px-4 py-3 rounded-xl shadow-lg text-white text-sm font-medium transition-all duration-300 animate-in slide-in-from-bottom-5 ${notification.type === 'success' ? 'bg-emerald-600' : 'bg-rose-600'}`}>
           {notification.type === 'success' ? <CheckCircle size={18} /> : <XCircle size={18} />}
           {notification.message}
         </div>
