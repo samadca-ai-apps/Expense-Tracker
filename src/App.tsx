@@ -1,12 +1,12 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recharts';
-import { Plus, IndianRupee, TrendingUp, TrendingDown, Calendar, Tag, User, Download, Trash2, Database, CheckCircle, XCircle, AlertCircle, Camera, Loader2 } from 'lucide-react';
+import { Plus, IndianRupee, TrendingUp, TrendingDown, Calendar, Tag, User, Download, Trash2, Database, CheckCircle, XCircle, AlertCircle, Camera, Loader2, Edit2, LayoutDashboard, List, PlusCircle, X, FileText } from 'lucide-react';
 import { format, isSameMonth } from 'date-fns';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import html2canvas from 'html2canvas';
 import { db, isFirebaseConfigured, initError } from './firebase';
-import { collection, addDoc, getDocs, deleteDoc, doc, query, orderBy, limit } from 'firebase/firestore';
+import { collection, addDoc, getDocs, deleteDoc, doc, query, orderBy, limit, updateDoc } from 'firebase/firestore';
 import { GoogleGenAI, Type } from '@google/genai';
 
 type TransactionType = 'Income' | 'Expense';
@@ -35,6 +35,12 @@ export default function App() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [notification, setNotification] = useState<{message: string, type: 'success' | 'error'} | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'add' | 'transactions'>('dashboard');
+  const [showReportModal, setShowReportModal] = useState(false);
+  const [reportType, setReportType] = useState<'monthly' | 'yearly'>('monthly');
+  const [reportMonth, setReportMonth] = useState(format(new Date(), 'yyyy-MM'));
+  const [reportYear, setReportYear] = useState(format(new Date(), 'yyyy'));
   const fileInputRef = useRef<HTMLInputElement>(null);
   const currentUser = 'samadca@gmail.com'; // Mock active user
 
@@ -148,7 +154,7 @@ export default function App() {
 
     const selectedDate = date ? new Date(date + 'T12:00:00') : new Date();
 
-    const newTransaction = {
+    const transactionData = {
       date: selectedDate.toISOString(),
       category,
       description: description || '',
@@ -158,16 +164,42 @@ export default function App() {
     };
 
     try {
-      const docRef = await addDoc(collection(db!, 'transactions'), newTransaction);
-      setTransactions([{ id: docRef.id, ...newTransaction } as Transaction, ...transactions]);
-      setAmount('');
-      setDescription('');
-      setDate(format(new Date(), 'yyyy-MM-dd'));
-      showNotification('Transaction added successfully!', 'success');
+      if (editingId) {
+        await updateDoc(doc(db!, 'transactions', editingId), transactionData);
+        setTransactions(transactions.map(t => t.id === editingId ? { id: editingId, ...transactionData } as Transaction : t));
+        showNotification('Transaction updated successfully!', 'success');
+        cancelEdit();
+      } else {
+        const docRef = await addDoc(collection(db!, 'transactions'), transactionData);
+        setTransactions([{ id: docRef.id, ...transactionData } as Transaction, ...transactions]);
+        setAmount('');
+        setDescription('');
+        setDate(format(new Date(), 'yyyy-MM-dd'));
+        showNotification('Transaction added successfully!', 'success');
+      }
     } catch (error) {
       console.error('Error saving transaction:', error);
-      showNotification('Failed to add transaction.', 'error');
+      showNotification('Failed to save transaction.', 'error');
     }
+  };
+
+  const handleEditClick = (t: Transaction) => {
+    setEditingId(t.id);
+    setAmount(t.amount.toString());
+    setCategory(t.category);
+    setDescription(t.description);
+    setDate(format(new Date(t.date), 'yyyy-MM-dd'));
+    setType(t.type);
+    setActiveTab('add');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setAmount('');
+    setDescription('');
+    setDate(format(new Date(), 'yyyy-MM-dd'));
+    setActiveTab('transactions');
   };
 
   const handleDeleteClick = (id: string) => {
@@ -192,48 +224,84 @@ export default function App() {
     setDeleteConfirmId(null);
   };
 
-  const downloadReport = async () => {
-    const now = new Date();
-    const currentMonthTransactions = transactions.filter(t => isSameMonth(new Date(t.date), now));
-    
-    if (currentMonthTransactions.length === 0) {
-      alert("No transactions to download for this month.");
+  const generateReport = async () => {
+    const docPdf = new jsPDF();
+    const title = reportType === 'monthly'
+      ? `Expense Report - ${format(new Date(reportMonth + '-01T12:00:00'), 'MMMM yyyy')}`
+      : `Expense Report - Year ${reportYear}`;
+
+    const filtered = transactions.filter(t => {
+      const tDate = new Date(t.date);
+      if (reportType === 'monthly') {
+        return format(tDate, 'yyyy-MM') === reportMonth;
+      } else {
+        return format(tDate, 'yyyy') === reportYear;
+      }
+    });
+
+    if (filtered.length === 0) {
+      alert("No transactions to download for this period.");
       return;
     }
 
-    const pdf = new jsPDF();
-    pdf.setFontSize(18);
-    pdf.text(`Monthly Expense Report - ${format(now, 'MMMM yyyy')}`, 14, 20);
+    docPdf.setFontSize(20);
+    docPdf.text(title, 14, 22);
 
-    let startY = 30;
-    const chartElement = document.getElementById('chart-container');
-    
-    if (chartElement) {
-      try {
-        const canvas = await html2canvas(chartElement, { scale: 2, backgroundColor: '#ffffff' });
-        const imgData = canvas.toDataURL('image/png');
-        const imgWidth = 180;
-        const imgHeight = (canvas.height * imgWidth) / canvas.width;
-        pdf.addImage(imgData, 'PNG', 14, 30, imgWidth, imgHeight);
-        startY = 30 + imgHeight + 10;
-      } catch (err) {
-        console.error("Failed to capture chart", err);
-      }
-    }
+    const totalIncome = filtered.filter(t => t.type === 'Income').reduce((acc, curr) => acc + curr.amount, 0);
+    const totalExpense = filtered.filter(t => t.type === 'Expense').reduce((acc, curr) => acc + curr.amount, 0);
+    const balance = totalIncome - totalExpense;
 
-    autoTable(pdf, {
-      startY: startY,
-      head: [['Date', 'Description', 'Category', 'Type', 'Amount (Rs)']],
-      body: currentMonthTransactions.map(t => [
-        format(new Date(t.date), 'MMM d, yyyy'),
-        t.description || '-',
-        t.category,
-        t.type,
-        t.amount.toFixed(2)
-      ]),
+    docPdf.setFontSize(12);
+    docPdf.text(`Total Income: Rs. ${totalIncome.toFixed(2)}`, 14, 32);
+    docPdf.text(`Total Expense: Rs. ${totalExpense.toFixed(2)}`, 14, 38);
+    docPdf.text(`Net Balance: Rs. ${balance.toFixed(2)}`, 14, 44);
+
+    docPdf.setFontSize(14);
+    docPdf.text('Date-wise Transactions', 14, 56);
+
+    const tableData = filtered.map(t => [
+      format(new Date(t.date), 'MMM d, yyyy'),
+      t.type,
+      t.category,
+      t.description || '-',
+      `Rs. ${t.amount.toFixed(2)}`
+    ]);
+
+    autoTable(docPdf, {
+      startY: 60,
+      head: [['Date', 'Type', 'Category', 'Description', 'Amount']],
+      body: tableData,
+      theme: 'striped',
+      headStyles: { fillColor: [63, 131, 248] },
     });
 
-    pdf.save(`expense_report_${format(now, 'yyyy_MM')}.pdf`);
+    const categoryTotals = filtered.reduce((acc, t) => {
+      if (!acc[t.category]) acc[t.category] = { Income: 0, Expense: 0 };
+      acc[t.category][t.type] += t.amount;
+      return acc;
+    }, {} as Record<string, { Income: number, Expense: number }>);
+
+    const catTableData = Object.entries(categoryTotals).map(([cat, totals]) => [
+      cat,
+      `Rs. ${totals.Income.toFixed(2)}`,
+      `Rs. ${totals.Expense.toFixed(2)}`,
+      `Rs. ${totals.Income > totals.Expense ? '+' : ''}Rs. ${(totals.Income - totals.Expense).toFixed(2)}`
+    ]);
+
+    const finalY = (docPdf as any).lastAutoTable.finalY || 60;
+
+    docPdf.text('Category-wise Summary', 14, finalY + 14);
+
+    autoTable(docPdf, {
+      startY: finalY + 18,
+      head: [['Category', 'Total Income', 'Total Expense', 'Net']],
+      body: catTableData,
+      theme: 'striped',
+      headStyles: { fillColor: [16, 185, 129] },
+    });
+
+    docPdf.save(`${title.replace(/ /g, '_')}.pdf`);
+    setShowReportModal(false);
   };
 
   const stats = useMemo(() => {
@@ -335,11 +403,11 @@ export default function App() {
             </p>
           </div>
           <button
-            onClick={downloadReport}
+            onClick={() => setShowReportModal(true)}
             className="flex items-center justify-center gap-2 px-4 py-2 bg-white border border-slate-200 text-slate-700 rounded-xl hover:bg-slate-50 transition-colors shadow-sm font-medium text-sm"
           >
             <Download size={16} />
-            Download Monthly Report (PDF)
+            Download Report
           </button>
         </header>
 
@@ -376,14 +444,15 @@ export default function App() {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 pb-24 lg:pb-0">
           
           {/* Add Transaction Form */}
-          <div className="lg:col-span-1 bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
-            <div className="flex items-center justify-between mb-6">
-              <h2 className="text-xl font-semibold flex items-center gap-2">
-                <Plus size={20} className="text-blue-600" /> Add Transaction
-              </h2>
+          <div className={`lg:col-span-1 ${activeTab === 'add' ? 'block' : 'hidden lg:block'}`}>
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6 sticky top-6">
+              <div className="flex items-center justify-between mb-6">
+                <h2 className="text-xl font-semibold flex items-center gap-2">
+                  <Plus size={20} className="text-blue-600" /> {editingId ? 'Edit Transaction' : 'Add Transaction'}
+                </h2>
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
@@ -487,17 +556,33 @@ export default function App() {
                 />
               </div>
 
-              <button
-                type="submit"
-                className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-xl transition-colors shadow-sm focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-              >
-                Save Transaction
-              </button>
+              <div className="flex gap-3 pt-2">
+                {editingId && (
+                  <button
+                    type="button"
+                    onClick={cancelEdit}
+                    className="flex-1 bg-slate-100 text-slate-700 py-3 rounded-xl font-medium hover:bg-slate-200 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                )}
+                <button
+                  type="submit"
+                  disabled={loading || isAnalyzing}
+                  className="flex-1 py-3 px-4 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-xl transition-colors shadow-sm focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
+                >
+                  {editingId ? 'Update' : 'Save'} Transaction
+                </button>
+              </div>
             </form>
           </div>
+        </div>
 
-          {/* Chart & List */}
-          <div className="lg:col-span-2 space-y-8">
+        {/* Chart & List */}
+        <div className="lg:col-span-2 space-y-8">
+          
+          {/* Dashboard Tab Content */}
+          <div className={`space-y-8 ${activeTab === 'dashboard' ? 'block' : 'hidden lg:block'}`}>
             
             {/* Chart */}
             <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
@@ -533,12 +618,13 @@ export default function App() {
                 )}
               </div>
             </div>
+          </div>
 
-            {/* Recent Transactions */}
-            <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
-              <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between">
-                <h2 className="text-xl font-semibold">Recent Transactions</h2>
-              </div>
+          {/* Transactions Tab Content */}
+          <div className={`bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden ${activeTab === 'transactions' ? 'block' : 'hidden lg:block'}`}>
+            <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between">
+              <h2 className="text-xl font-semibold">Recent Transactions</h2>
+            </div>
               
               <div className="overflow-x-auto">
                 <table className="w-full text-left border-collapse">
@@ -576,13 +662,22 @@ export default function App() {
                             {t.type === 'Income' ? '+' : '-'}₹{t.amount.toFixed(2)}
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap text-center">
-                            <button
-                              onClick={() => handleDeleteClick(t.id)}
-                              className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
-                              title="Delete Transaction"
-                            >
-                              <Trash2 size={16} />
-                            </button>
+                            <div className="flex items-center justify-center gap-2">
+                              <button
+                                onClick={() => handleEditClick(t)}
+                                className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                                title="Edit Transaction"
+                              >
+                                <Edit2 size={16} />
+                              </button>
+                              <button
+                                onClick={() => handleDeleteClick(t.id)}
+                                className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
+                                title="Delete Transaction"
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       ))
@@ -632,6 +727,74 @@ export default function App() {
           </div>
         </div>
       )}
+      {/* Report Modal */}
+      {showReportModal && (
+        <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl p-6 max-w-sm w-full shadow-xl animate-in zoom-in-95">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-slate-900 flex items-center gap-2">
+                <FileText size={20} className="text-blue-600" /> Generate Report
+              </h3>
+              <button onClick={() => setShowReportModal(false)} className="text-slate-400 hover:text-slate-600">
+                <X size={20} />
+              </button>
+            </div>
+            
+            <div className="space-y-4 mb-6">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-2">Report Type</label>
+                <div className="flex gap-4">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input type="radio" checked={reportType === 'monthly'} onChange={() => setReportType('monthly')} className="text-blue-600 focus:ring-blue-500" />
+                    <span className="text-sm text-slate-700">Monthly</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input type="radio" checked={reportType === 'yearly'} onChange={() => setReportType('yearly')} className="text-blue-600 focus:ring-blue-500" />
+                    <span className="text-sm text-slate-700">Yearly</span>
+                  </label>
+                </div>
+              </div>
+
+              {reportType === 'monthly' ? (
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Select Month</label>
+                  <input type="month" value={reportMonth} onChange={(e) => setReportMonth(e.target.value)} className="block w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
+                </div>
+              ) : (
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Select Year</label>
+                  <input type="number" min="2000" max="2100" value={reportYear} onChange={(e) => setReportYear(e.target.value)} className="block w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
+                </div>
+              )}
+            </div>
+
+            <div className="flex gap-3">
+              <button onClick={() => setShowReportModal(false)} className="flex-1 px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium rounded-xl transition-colors">
+                Cancel
+              </button>
+              <button onClick={generateReport} className="flex-1 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-xl transition-colors flex items-center justify-center gap-2">
+                <Download size={18} /> Download
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Mobile Bottom Navigation */}
+      <div className="lg:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 flex justify-around p-2 pb-4 z-40 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]">
+        <button onClick={() => setActiveTab('dashboard')} className={`flex flex-col items-center gap-1 p-2 w-20 rounded-xl transition-colors ${activeTab === 'dashboard' ? 'text-blue-600 bg-blue-50' : 'text-slate-500 hover:bg-slate-50'}`}>
+          <LayoutDashboard size={20} />
+          <span className="text-[10px] font-medium">Dashboard</span>
+        </button>
+        <button onClick={() => setActiveTab('add')} className={`flex flex-col items-center gap-1 p-2 w-20 rounded-xl transition-colors ${activeTab === 'add' ? 'text-blue-600 bg-blue-50' : 'text-slate-500 hover:bg-slate-50'}`}>
+          <PlusCircle size={20} />
+          <span className="text-[10px] font-medium">Add</span>
+        </button>
+        <button onClick={() => setActiveTab('transactions')} className={`flex flex-col items-center gap-1 p-2 w-20 rounded-xl transition-colors ${activeTab === 'transactions' ? 'text-blue-600 bg-blue-50' : 'text-slate-500 hover:bg-slate-50'}`}>
+          <List size={20} />
+          <span className="text-[10px] font-medium">List</span>
+        </button>
+      </div>
     </div>
   );
 }
