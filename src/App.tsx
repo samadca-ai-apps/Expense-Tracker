@@ -1,12 +1,13 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recharts';
-import { Plus, IndianRupee, TrendingUp, TrendingDown, Calendar, Tag, User, Download, Trash2, Database, CheckCircle, XCircle, AlertCircle, Camera, Loader2, Edit2, LayoutDashboard, List, PlusCircle, X, FileText } from 'lucide-react';
+import { Plus, IndianRupee, TrendingUp, TrendingDown, Calendar, Tag, User, Download, Trash2, Database, CheckCircle, XCircle, AlertCircle, Camera, Loader2, Edit2, LayoutDashboard, List, PlusCircle, X, FileText, LogOut, LogIn } from 'lucide-react';
 import { format, isSameMonth } from 'date-fns';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import html2canvas from 'html2canvas';
-import { db, isFirebaseConfigured, initError } from './firebase';
-import { collection, addDoc, getDocs, deleteDoc, doc, query, orderBy, limit, updateDoc } from 'firebase/firestore';
+import { db, auth, googleProvider, isFirebaseConfigured, initError } from './firebase';
+import { collection, addDoc, getDocs, deleteDoc, doc, query, orderBy, limit, updateDoc, where } from 'firebase/firestore';
+import { signInWithPopup, signOut, onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
 import { GoogleGenAI, Type } from '@google/genai';
 
 type TransactionType = 'Income' | 'Expense';
@@ -42,21 +43,43 @@ export default function App() {
   const [reportMonth, setReportMonth] = useState(format(new Date(), 'yyyy-MM'));
   const [reportYear, setReportYear] = useState(format(new Date(), 'yyyy'));
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const currentUser = 'samadca@gmail.com'; // Mock active user
+  const billUploadRef = useRef<HTMLInputElement>(null);
+  const [user, setUser] = useState<FirebaseUser | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null);
 
   const categories = type === 'Expense' ? EXPENSE_CATEGORIES : INCOME_CATEGORIES;
 
   useEffect(() => {
-    if (isFirebaseConfigured) {
-      fetchTransactions();
-    } else {
+    if (!isFirebaseConfigured || !auth) {
       setLoading(false);
+      setAuthLoading(false);
+      return;
     }
+
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+      setAuthLoading(false);
+      if (currentUser) {
+        fetchTransactions(currentUser.email!);
+      } else {
+        setTransactions([]);
+        setLoading(false);
+      }
+    });
+
+    return () => unsubscribe();
   }, []);
 
-  const fetchTransactions = async () => {
+  const fetchTransactions = async (email: string) => {
+    setLoading(true);
     try {
-      const q = query(collection(db!, 'transactions'), orderBy('date', 'desc'), limit(100));
+      const q = query(
+        collection(db!, 'transactions'),
+        where('user', '==', email),
+        orderBy('date', 'desc'),
+        limit(100)
+      );
       const querySnapshot = await getDocs(q);
       const data = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Transaction));
       setTransactions(data);
@@ -64,6 +87,26 @@ export default function App() {
       console.error('Error fetching transactions:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleLogin = async () => {
+    if (!auth || !googleProvider) return;
+    try {
+      googleProvider.setCustomParameters({ prompt: 'select_account' });
+      await signInWithPopup(auth, googleProvider);
+    } catch (error) {
+      console.error("Login Error:", error);
+      showNotification('Failed to log in.', 'error');
+    }
+  };
+
+  const handleLogout = async () => {
+    if (!auth) return;
+    try {
+      await signOut(auth);
+    } catch (error) {
+      console.error("Logout Error:", error);
     }
   };
 
@@ -160,7 +203,7 @@ export default function App() {
       description: description || '',
       amount: Number(amount),
       type,
-      user: currentUser,
+      user: user?.email || '',
     };
 
     try {
@@ -277,11 +320,11 @@ export default function App() {
 
     const categoryTotals = filtered.reduce((acc, t) => {
       if (!acc[t.category]) acc[t.category] = { Income: 0, Expense: 0 };
-      acc[t.category][t.type] += t.amount;
+      acc[t.category][t.type as 'Income' | 'Expense'] += t.amount;
       return acc;
     }, {} as Record<string, { Income: number, Expense: number }>);
 
-    const catTableData = Object.entries(categoryTotals).map(([cat, totals]) => [
+    const catTableData = Object.entries(categoryTotals).map(([cat, totals]: [string, { Income: number, Expense: number }]) => [
       cat,
       `Rs. ${totals.Income.toFixed(2)}`,
       `Rs. ${totals.Expense.toFixed(2)}`,
@@ -334,7 +377,7 @@ export default function App() {
     { name: 'Expenses', value: stats.monthlyExpense, color: '#ef4444' },
   ].filter(d => d.value > 0);
 
-  if (loading) {
+  if (loading || authLoading) {
     return <div className="min-h-screen bg-slate-50 flex items-center justify-center text-slate-500">Loading...</div>;
   }
 
@@ -390,6 +433,32 @@ export default function App() {
     );
   }
 
+  if (!user) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+        <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-100 max-w-md w-full text-center">
+          <div className="w-16 h-16 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center mx-auto mb-6">
+            <IndianRupee size={32} />
+          </div>
+          <h1 className="text-2xl font-bold text-slate-900 mb-2">Unzila's Expense Tracker</h1>
+          <p className="text-slate-500 mb-8">Sign in to manage your personal expenses and income securely.</p>
+          <button
+            onClick={handleLogin}
+            className="w-full flex items-center justify-center gap-3 py-3 px-4 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 font-medium rounded-xl transition-colors shadow-sm"
+          >
+            <svg className="w-5 h-5" viewBox="0 0 24 24">
+              <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4" />
+              <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853" />
+              <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05" />
+              <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335" />
+            </svg>
+            Continue with Google
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-50 font-sans text-slate-900 p-4 md:p-8">
       <div className="max-w-6xl mx-auto space-y-8">
@@ -399,47 +468,57 @@ export default function App() {
           <div>
             <h1 className="text-3xl font-bold tracking-tight text-slate-900">Unzila's Expense Tracker</h1>
             <p className="text-slate-500 mt-1 flex items-center gap-2">
-              <User size={16} /> Logged in as <span className="font-medium text-slate-700">{currentUser}</span>
+              <User size={16} /> Logged in as <span className="font-medium text-slate-700">{user.email}</span>
             </p>
           </div>
-          <button
-            onClick={() => setShowReportModal(true)}
-            className="flex items-center justify-center gap-2 px-4 py-2 bg-white border border-slate-200 text-slate-700 rounded-xl hover:bg-slate-50 transition-colors shadow-sm font-medium text-sm"
-          >
-            <Download size={16} />
-            Download Report
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setShowReportModal(true)}
+              className="flex items-center justify-center gap-2 px-4 py-2 bg-white border border-slate-200 text-slate-700 rounded-xl hover:bg-slate-50 transition-colors shadow-sm font-medium text-sm"
+            >
+              <Download size={16} />
+              <span className="hidden sm:inline">Download Report</span>
+            </button>
+            <button
+              onClick={handleLogout}
+              className="flex items-center justify-center gap-2 px-4 py-2 bg-white border border-rose-200 text-rose-600 rounded-xl hover:bg-rose-50 transition-colors shadow-sm font-medium text-sm"
+              title="Sign Out"
+            >
+              <LogOut size={16} />
+              <span className="hidden sm:inline">Sign Out</span>
+            </button>
+          </div>
         </header>
 
         {/* Stats Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 flex items-center gap-4">
-            <div className="p-3 bg-blue-50 text-blue-600 rounded-xl">
-              <IndianRupee size={24} />
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-3 md:gap-6">
+          <div className="col-span-2 md:col-span-1 bg-white rounded-2xl p-4 md:p-6 shadow-sm border border-slate-100 flex items-center gap-3 md:gap-4">
+            <div className="p-2 md:p-3 bg-blue-50 text-blue-600 rounded-xl">
+              <IndianRupee size={20} className="md:w-6 md:h-6" />
             </div>
             <div>
-              <p className="text-sm font-medium text-slate-500 uppercase tracking-wider">Total Balance</p>
-              <p className="text-3xl font-bold text-slate-900 mt-1">₹{stats.balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+              <p className="text-xs md:text-sm font-medium text-slate-500 uppercase tracking-wider">Total Balance</p>
+              <p className="text-xl md:text-3xl font-bold text-slate-900 mt-1">₹{stats.balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
             </div>
           </div>
           
-          <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 flex items-center gap-4">
-            <div className="p-3 bg-emerald-50 text-emerald-600 rounded-xl">
-              <TrendingUp size={24} />
+          <div className="bg-white rounded-2xl p-4 md:p-6 shadow-sm border border-slate-100 flex items-center gap-3 md:gap-4">
+            <div className="p-2 md:p-3 bg-emerald-50 text-emerald-600 rounded-xl">
+              <TrendingUp size={20} className="md:w-6 md:h-6" />
             </div>
             <div>
-              <p className="text-sm font-medium text-slate-500 uppercase tracking-wider">Monthly Income</p>
-              <p className="text-3xl font-bold text-emerald-600 mt-1">₹{stats.monthlyIncome.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+              <p className="text-xs md:text-sm font-medium text-slate-500 uppercase tracking-wider">Income</p>
+              <p className="text-lg md:text-3xl font-bold text-emerald-600 mt-1">₹{stats.monthlyIncome.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
             </div>
           </div>
 
-          <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 flex items-center gap-4">
-            <div className="p-3 bg-rose-50 text-rose-600 rounded-xl">
-              <TrendingDown size={24} />
+          <div className="bg-white rounded-2xl p-4 md:p-6 shadow-sm border border-slate-100 flex items-center gap-3 md:gap-4">
+            <div className="p-2 md:p-3 bg-rose-50 text-rose-600 rounded-xl">
+              <TrendingDown size={20} className="md:w-6 md:h-6" />
             </div>
             <div>
-              <p className="text-sm font-medium text-slate-500 uppercase tracking-wider">Monthly Expenses</p>
-              <p className="text-3xl font-bold text-rose-600 mt-1">₹{stats.monthlyExpense.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+              <p className="text-xs md:text-sm font-medium text-slate-500 uppercase tracking-wider">Expenses</p>
+              <p className="text-lg md:text-3xl font-bold text-rose-600 mt-1">₹{stats.monthlyExpense.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
             </div>
           </div>
         </div>
@@ -453,21 +532,40 @@ export default function App() {
                 <h2 className="text-xl font-semibold flex items-center gap-2">
                   <Plus size={20} className="text-blue-600" /> {editingId ? 'Edit Transaction' : 'Add Transaction'}
                 </h2>
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                disabled={isAnalyzing}
-                className="flex items-center gap-2 px-3 py-1.5 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
-                title="Scan Receipt"
-              >
-                {isAnalyzing ? <Loader2 size={16} className="animate-spin" /> : <Camera size={16} />}
-                {isAnalyzing ? 'Analyzing...' : 'Scan'}
-              </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => billUploadRef.current?.click()}
+                    disabled={isAnalyzing}
+                    className="flex items-center gap-2 px-3 py-1.5 bg-emerald-50 text-emerald-600 hover:bg-emerald-100 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
+                    title="Upload Bill"
+                  >
+                    {isAnalyzing ? <Loader2 size={16} className="animate-spin" /> : <PlusCircle size={16} />}
+                    <span className="hidden sm:inline">{isAnalyzing ? 'Analyzing...' : 'Upload Bill'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={isAnalyzing}
+                    className="flex items-center gap-2 px-3 py-1.5 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
+                    title="Scan Receipt"
+                  >
+                    {isAnalyzing ? <Loader2 size={16} className="animate-spin" /> : <Camera size={16} />}
+                    <span className="hidden sm:inline">{isAnalyzing ? 'Analyzing...' : 'Scan'}</span>
+                  </button>
+                </div>
               <input 
                 type="file" 
                 accept="image/*" 
                 capture="environment" 
                 ref={fileInputRef} 
+                onChange={handleFileUpload} 
+                className="hidden" 
+              />
+              <input 
+                type="file" 
+                accept="image/*" 
+                ref={billUploadRef} 
                 onChange={handleFileUpload} 
                 className="hidden" 
               />
@@ -630,12 +728,12 @@ export default function App() {
                 <table className="w-full text-left border-collapse">
                   <thead>
                     <tr className="bg-slate-50 text-slate-500 text-xs uppercase tracking-wider">
-                      <th className="px-6 py-4 font-medium">Date</th>
-                      <th className="px-6 py-4 font-medium">Description</th>
-                      <th className="px-6 py-4 font-medium">Category</th>
-                      <th className="px-6 py-4 font-medium">User</th>
-                      <th className="px-6 py-4 font-medium text-right">Amount</th>
-                      <th className="px-6 py-4 font-medium text-center">Action</th>
+                      <th className="px-3 md:px-6 py-4 font-medium">Date</th>
+                      <th className="px-3 md:px-6 py-4 font-medium hidden md:table-cell">Description</th>
+                      <th className="px-3 md:px-6 py-4 font-medium">Category</th>
+                      <th className="px-3 md:px-6 py-4 font-medium hidden md:table-cell">User</th>
+                      <th className="px-3 md:px-6 py-4 font-medium text-right">Amount</th>
+                      <th className="px-3 md:px-6 py-4 font-medium text-center">Action</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 text-sm">
@@ -648,31 +746,47 @@ export default function App() {
                     ) : (
                       transactions.map((t) => (
                         <tr key={t.id} className="hover:bg-slate-50 transition-colors">
-                          <td className="px-6 py-4 whitespace-nowrap text-slate-500 flex items-center gap-2">
-                            <Calendar size={14} /> {format(new Date(t.date), 'MMM d, yyyy')}
+                          <td className="px-3 md:px-6 py-4 whitespace-nowrap text-slate-500">
+                            <div className="flex items-center gap-2">
+                              {/* Mobile Circle Date */}
+                              <div className="md:hidden flex flex-col items-center justify-center w-10 h-10 rounded-full bg-blue-50 text-blue-700 border border-blue-100 shrink-0">
+                                <span className="text-[9px] uppercase font-bold leading-none">{format(new Date(t.date), 'MMM')}</span>
+                                <span className="text-sm font-bold leading-tight">{format(new Date(t.date), 'd')}</span>
+                              </div>
+                              {/* Desktop Date */}
+                              <span className="hidden md:flex items-center gap-2">
+                                <Calendar size={14} /> {format(new Date(t.date), 'MMM d, yyyy')}
+                              </span>
+                            </div>
                           </td>
-                          <td className="px-6 py-4 font-medium text-slate-900">{t.description || '-'}</td>
-                          <td className="px-6 py-4">
-                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-700">
+                          <td className="px-3 md:px-6 py-4 font-medium text-slate-900 hidden md:table-cell">{t.description || '-'}</td>
+                          <td className="px-3 md:px-6 py-4">
+                            <span className="inline-flex items-center px-2 md:px-2.5 py-0.5 rounded-full text-[10px] md:text-xs font-medium bg-slate-100 text-slate-700">
                               {t.category}
                             </span>
                           </td>
-                          <td className="px-6 py-4 text-slate-500 text-xs">{t.user}</td>
-                          <td className={`px-6 py-4 whitespace-nowrap text-right font-semibold ${t.type === 'Income' ? 'text-emerald-600' : 'text-rose-600'}`}>
+                          <td className="px-3 md:px-6 py-4 text-slate-500 text-xs hidden md:table-cell">{t.user}</td>
+                          <td className={`px-3 md:px-6 py-4 whitespace-nowrap text-right font-semibold text-xs md:text-sm ${t.type === 'Income' ? 'text-emerald-600' : 'text-rose-600'}`}>
                             {t.type === 'Income' ? '+' : '-'}₹{t.amount.toFixed(2)}
                           </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-center">
+                          <td className="px-3 md:px-6 py-4 whitespace-nowrap text-center">
                             <div className="flex items-center justify-center gap-2">
                               <button
+                                onClick={() => setSelectedTransaction(t)}
+                                className="md:hidden p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors text-xs font-medium"
+                              >
+                                Details
+                              </button>
+                              <button
                                 onClick={() => handleEditClick(t)}
-                                className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                                className="hidden md:block p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
                                 title="Edit Transaction"
                               >
                                 <Edit2 size={16} />
                               </button>
                               <button
                                 onClick={() => handleDeleteClick(t.id)}
-                                className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
+                                className="hidden md:block p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
                                 title="Delete Transaction"
                               >
                                 <Trash2 size={16} />
@@ -795,6 +909,73 @@ export default function App() {
           <span className="text-[10px] font-medium">List</span>
         </button>
       </div>
+      {/* Transaction Details Modal */}
+      {selectedTransaction && (
+        <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl p-6 max-w-sm w-full shadow-xl animate-in zoom-in-95">
+            <div className="flex items-center justify-between mb-6">
+              <h3 className="text-lg font-semibold text-slate-900">Transaction Details</h3>
+              <button onClick={() => setSelectedTransaction(null)} className="text-slate-400 hover:text-slate-600">
+                <X size={20} />
+              </button>
+            </div>
+            
+            <div className="space-y-4">
+              <div className="flex justify-between py-2 border-b border-slate-50">
+                <span className="text-slate-500 text-sm">Date</span>
+                <span className="text-slate-900 font-medium">{format(new Date(selectedTransaction.date), 'MMMM d, yyyy')}</span>
+              </div>
+              <div className="flex justify-between py-2 border-b border-slate-50">
+                <span className="text-slate-500 text-sm">Type</span>
+                <span className={`font-medium ${selectedTransaction.type === 'Income' ? 'text-emerald-600' : 'text-rose-600'}`}>
+                  {selectedTransaction.type}
+                </span>
+              </div>
+              <div className="flex justify-between py-2 border-b border-slate-50">
+                <span className="text-slate-500 text-sm">Category</span>
+                <span className="text-slate-900 font-medium">{selectedTransaction.category}</span>
+              </div>
+              <div className="flex justify-between py-2 border-b border-slate-50">
+                <span className="text-slate-500 text-sm">Amount</span>
+                <span className={`font-bold ${selectedTransaction.type === 'Income' ? 'text-emerald-600' : 'text-rose-600'}`}>
+                  ₹{selectedTransaction.amount.toFixed(2)}
+                </span>
+              </div>
+              <div className="py-2">
+                <span className="text-slate-500 text-sm block mb-1">Description</span>
+                <p className="text-slate-900 bg-slate-50 p-3 rounded-lg text-sm italic">
+                  {selectedTransaction.description || 'No description provided'}
+                </p>
+              </div>
+              <div className="py-2">
+                <span className="text-slate-500 text-sm block mb-1">User</span>
+                <span className="text-slate-700 text-xs break-all">{selectedTransaction.user}</span>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 mt-8">
+              <button
+                onClick={() => {
+                  handleEditClick(selectedTransaction);
+                  setSelectedTransaction(null);
+                }}
+                className="flex items-center justify-center gap-2 py-2.5 bg-blue-50 text-blue-600 font-medium rounded-xl hover:bg-blue-100 transition-colors"
+              >
+                <Edit2 size={16} /> Edit
+              </button>
+              <button
+                onClick={() => {
+                  handleDeleteClick(selectedTransaction.id);
+                  setSelectedTransaction(null);
+                }}
+                className="flex items-center justify-center gap-2 py-2.5 bg-rose-50 text-rose-600 font-medium rounded-xl hover:bg-rose-100 transition-colors"
+              >
+                <Trash2 size={16} /> Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

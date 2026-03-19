@@ -1,5 +1,6 @@
 import { initializeApp } from 'firebase/app';
 import { getFirestore } from 'firebase/firestore';
+import { getAuth, GoogleAuthProvider } from 'firebase/auth';
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -12,16 +13,20 @@ export const isFirebaseConfigured = !!firebaseConfig.projectId && !!firebaseConf
 
 let app = null;
 let db = null;
+let auth = null;
+let googleProvider = null;
 let initError = null;
 
 try {
   if (isFirebaseConfigured) {
     app = initializeApp(firebaseConfig);
     db = getFirestore(app);
+    auth = getAuth(app);
+    googleProvider = new GoogleAuthProvider();
   }
 } catch (error: any) {
   console.error("Firebase initialization error:", error);
   initError = error.message;
 }
 
-export { app, db, initError };
+export { app, db, auth, googleProvider, initError };
