@@ -22,7 +22,7 @@ interface Transaction {
   user: string;
 }
 
-const EXPENSE_CATEGORIES = ['Groceries', 'Rent/Mortgage', 'Utilities', 'Transportation', 'Entertainment', 'Dining Out', 'Healthcare', 'Charity', 'Education', 'Savings', 'Other'];
+const EXPENSE_CATEGORIES = ['Groceries', 'Rent/Mortgage', 'Utilities', 'Transportation', 'Entertainment', 'Dining Out', 'Healthcare', 'Charity', 'Education', 'Savings', 'Gifts', 'Other'];
 const INCOME_CATEGORIES = ['Salary', 'Business', 'Investments', 'Gifts', 'Other'];
 
 export default function App() {
