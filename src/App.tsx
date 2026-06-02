@@ -77,8 +77,7 @@ export default function App() {
       const q = query(
         collection(db!, 'transactions'),
         where('user', '==', email),
-        orderBy('date', 'desc'),
-        limit(100)
+        orderBy('date', 'desc')
       );
       const querySnapshot = await getDocs(q);
       const data = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Transaction));
